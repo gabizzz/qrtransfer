@@ -24,9 +24,6 @@
     .info { font-size: 0.95rem; color: #aaa; margin-top: 8px; font-weight: 500; }
     .counter { font-size: 1.1rem; color: #28a745; font-weight: bold; margin-top: 6px; }
   </style>
-
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
 </head>
 <body>
 
@@ -60,6 +57,35 @@
   </div>
 
   <script>
+    // Carga resiliente de scripts con fallbacks para GitHub Pages
+    function loadScript(src) {
+      return new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = src;
+        s.onload = resolve;
+        s.onerror = reject;
+        document.head.appendChild(s);
+      });
+    }
+
+    async function ensureLibrariesLoaded() {
+      if (typeof QRCode === 'undefined') {
+        try {
+          await loadScript('https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js');
+        } catch (e) {
+          await loadScript('https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js');
+        }
+      }
+
+      if (typeof jsQR === 'undefined') {
+        try {
+          await loadScript('https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js');
+        } catch (e) {
+          await loadScript('https://unpkg.com/jsqr@1.4.0/dist/jsQR.js');
+        }
+      }
+    }
+
     const CHUNK_SIZE = 250;
     const FPS = 8;
     let txTimer = null;
@@ -87,11 +113,18 @@
     // ==========================================
     // LÓGICA EMISOR
     // ==========================================
-    const qrGenTx = new QRCode(document.getElementById('qrcodeTx'), { width: 260, height: 260, correctLevel: QRCode.CorrectLevel.L });
+    let qrGenTx = null;
 
-    document.getElementById('fileInput').addEventListener('change', function(e) {
+    document.getElementById('fileInput').addEventListener('change', async function(e) {
       const file = e.target.files[0];
       if (!file) return;
+
+      document.getElementById('txInfo').innerText = "Cargando componentes...";
+      await ensureLibrariesLoaded();
+
+      if (!qrGenTx) {
+        qrGenTx = new QRCode(document.getElementById('qrcodeTx'), { width: 260, height: 260, correctLevel: QRCode.CorrectLevel.L });
+      }
 
       const reader = new FileReader();
       reader.onload = function(evt) {
@@ -131,10 +164,12 @@
       const video = document.getElementById('rxVideo');
       const rxInfo = document.getElementById('rxInfo');
 
-      // Verificación de Origen Seguro (HTTPS / Localhost)
-      if (!window.isSecureContext) {
-        alert("⚠️ Atencion: El acceso a la cámara requiere HTTPS o localhost.\n\nSi estás probando por IP local (http://192.168.x.x), debes habilitar la flag en Chrome:\nchrome://flags/#unsafely-treat-insecure-origin-as-secure");
-        rxInfo.innerText = "Error: Contexto no seguro (requiere HTTPS).";
+      rxInfo.innerText = 'Cargando lector de código QR...';
+      try {
+        await ensureLibrariesLoaded();
+      } catch (err) {
+        alert("Error al descargar librerías QR. Verifica tu conexión.");
+        rxInfo.innerText = "Error cargando jsQR.";
         return;
       }
 
@@ -150,28 +185,12 @@
         scanRxFrame();
       } catch (err) {
         console.error("Error de cámara:", err);
-        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-          alert("Permiso denegado. Habilita los permisos de cámara en la configuración del navegador para esta página.");
-          rxInfo.innerText = "Permiso de cámara denegado.";
-        } else if (err.name === 'NotFoundError') {
-          alert("No se detectó ninguna cámara en el dispositivo.");
-          rxInfo.innerText = "Cámara no encontrada.";
-        } else {
-          alert("Error al iniciar cámara: " + err.message);
-          rxInfo.innerText = "Error de cámara: " + err.message;
-        }
+        rxInfo.innerText = "Error de cámara: " + err.message;
       }
     }
 
     function scanRxFrame() {
       const video = document.getElementById('rxVideo');
-      
-      // Control defensivo para evitar 'jsQR is not defined' si la CDN tarda en cargar
-      if (typeof jsQR === 'undefined') {
-        document.getElementById('rxInfo').innerText = 'Cargando motor de lectura QR...';
-        animFrameId = requestAnimationFrame(scanRxFrame);
-        return;
-      }
 
       if (video.readyState === video.HAVE_ENOUGH_DATA) {
         const canvas = document.createElement('canvas');
@@ -183,12 +202,14 @@
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         
         try {
-          const code = jsQR(imageData.data, imageData.width, imageData.height);
-          if (code && code.data) {
-            processRxPayload(code.data);
+          if (typeof jsQR !== 'undefined') {
+            const code = jsQR(imageData.data, imageData.width, imageData.height);
+            if (code && code.data) {
+              processRxPayload(code.data);
+            }
           }
         } catch (e) {
-          console.error("Error al procesar el frame con jsQR:", e);
+          console.error("Error procesando frame:", e);
         }
       }
       animFrameId = requestAnimationFrame(scanRxFrame);
