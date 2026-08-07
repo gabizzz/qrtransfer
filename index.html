@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Transmisión por QR Dinámico</title>
+  <style>
+    * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
+    body { margin: 0; padding: 16px; background: #121212; color: #f0f0f0; text-align: center; }
+    h1 { font-size: 1.3rem; margin-bottom: 16px; color: #fff; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+    button { flex: 1; padding: 12px; font-weight: bold; border: none; border-radius: 8px; background: #2a2a2a; color: #fff; cursor: pointer; transition: background 0.2s; }
+    button.active { background: #007bff; }
+    .btn-action { background: #28a745; width: 100%; margin-bottom: 12px; padding: 14px; font-size: 1rem; }
+    .btn-action:hover { background: #218838; }
+    .card { background: #1e1e1e; padding: 16px; border-radius: 12px; display: none; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
+    .card.active { display: block; }
+    input[type="file"] { margin: 12px 0; color: #ccc; }
+    #qrcode { display: flex; justify-content: center; margin-top: 12px; padding: 12px; background: #fff; border-radius: 8px; }
+    #video { width: 100%; max-width: 400px; border-radius: 8px; background: #000; display: none; margin: 0 auto; }
+    .progress-bar { width: 100%; background: #333; height: 14px; border-radius: 7px; overflow: hidden; margin: 12px 0; }
+    .progress-fill { width: 0%; height: 100%; background: #28a745; transition: width 0.15s ease-out; }
+    #resultImg { max-width: 100%; margin-top: 12px; border-radius: 8px; border: 2px solid #333; }
+    .info { font-size: 0.9rem; color: #aaa; margin-top: 8px; }
+  </style>
+
+  <!-- Librería para generar códigos QR -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <!-- Librería para leer códigos QR vía cámara (CDNJS) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+</head>
+<body>
+
+  <h1>Transmisión por QR Dinámico</h1>
+
+  <div class="tabs">
+    <button id="btnTx" class="active" onclick="switchMode('tx')">Emisor (Enviar)</button>
+    <button id="btnRx" onclick="switchMode('rx')">Receptor (Recibir)</button>
+  </div>
+
+  <!-- SECCIÓN EMISOR -->
+  <div id="txCard" class="card active">
+    <input type="file" id="fileInput" accept="image/*" />
+    <div id="txInfo" class="info">Selecciona una imagen para comenzar</div>
+    <div id="qrcode"></div>
+  </div>
+
+  <!-- SECCIÓN RECEPTOR -->
+  <div id="rxCard" class="card">
+    <button id="btnStartCamera" class="btn-action" onclick="requestCameraPermission()">Habilitar y Activar Cámara</button>
+    <video id="video" playsinline></video>
+    <div class="progress-bar">
+      <div id="progressFill" class="progress-fill"></div>
+    </div>
+    <div id="rxInfo" class="info">Presiona el botón para solicitar el acceso a la cámara.</div>
+    <img id="resultImg" alt="" />
+  </div>
+
+  <script>
+    const CHUNK_SIZE = 250; // Bytes por cada frame QR
+    const FPS = 8;          // Cuadros por segundo
+    let timer = null;
+
+    function switchMode(mode) {
+      document.getElementById('txCard').classList.toggle('active', mode === 'tx');
+      document.getElementById('rxCard').classList.toggle('active', mode === 'rx');
+      document.getElementById('btnTx').classList.toggle('active', mode === 'tx');
+      document.getElementById('btnRx').classList.toggle('active', mode === 'rx');
+      
+      if (mode === 'tx') {
+        stopScanner();
+      }
+    }
+
+    // ==========================================
+    // LÓGICA EMISOR
+    // ==========================================
+    const qrcodeContainer = document.getElementById('qrcode');
+    const qrGenerator = new QRCode(qrcodeContainer, {
+      width: 260,
+      height: 260,
+      correctLevel: QRCode.CorrectLevel.L
+    });
+
+    document.getElementById('fileInput').addEventListener('change', function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(evt) {
+        const bytes = new Uint8Array(evt.target.result);
+        const totalChunks = Math.ceil(bytes.length / CHUNK_SIZE);
+        const sessionId = Math.floor(Math.random() * 9000 + 1000);
+        let currentChunk = 0;
+
+        document.getElementById('txInfo').innerText = 
+          `Tamaño: ${(bytes.length / 1024).toFixed(1)} KB | Paquetes: ${totalChunks}`;
+
+        clearInterval(timer);
+        timer = setInterval(() => {
+          const start = currentChunk * CHUNK_SIZE;
+          const end = Math.min(start + CHUNK_SIZE, bytes.length);
+          const chunkData = bytes.slice(start, end);
+
+          let binary = '';
+          for (let i = 0; i < chunkData.length; i++) {
+            binary += String.fromCharCode(chunkData[i]);
+          }
+          const base64Chunk = btoa(binary);
+
+          const payload = `${sessionId}|${currentChunk}|${totalChunks}|${base64Chunk}`;
+          
+          qrGenerator.makeCode(payload);
+          currentChunk = (currentChunk + 1) % totalChunks;
+        }, 1000 / FPS);
+      };
+      reader.readAsArrayBuffer(file);
+    });
+
+    // ==========================================
+    // LÓGICA RECEPTOR
+    // ==========================================
+    const video = document.getElementById('video');
+    const canvasElement = document.createElement('canvas');
+    const canvas = canvasElement.getContext('2d');
+    let videoStream = null;
+    let animFrameId = null;
+
+    let rxSessionId = null;
+    let rxChunks = new Map();
+    let rxTotalChunks = 0;
+
+    async function requestCameraPermission() {
+      const infoText = document.getElementById('rxInfo');
+      const btnStart = document.getElementById('btnStartCamera');
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        infoText.innerText = 'Tu navegador no soporta el acceso a la cámara o requiere un origen HTTPS seguro.';
+        return;
+      }
+
+      try {
+        videoStream = await navigator.mediaDevices.getUserMedia({ 
+          video: { facingMode: 'environment' },
+          audio: false
+        });
+        
+        video.srcObject = videoStream;
+        video.setAttribute('playsinline', true);
+        video.style.display = 'block';
+        btnStart.style.display = 'none';
+        
+        await video.play();
+        infoText.innerText = 'Buscando código QR... Apunta la cámara a la pantalla del emisor.';
+        animFrameId = requestAnimationFrame(scanFrame);
+      } catch (err) {
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          infoText.innerText = 'Permiso denegado. Otorga permiso de cámara en los ajustes del navegador.';
+        } else if (err.name === 'NotFoundError') {
+          infoText.innerText = 'No se encontró ninguna cámara disponible en el dispositivo.';
+        } else {
+          infoText.innerText = 'Error al acceder a la cámara: ' + err.message;
+        }
+      }
+    }
+
+    function stopScanner() {
+      if (videoStream) {
+        videoStream.getTracks().forEach(track => track.stop());
+        videoStream = null;
+      }
+      if (animFrameId) cancelAnimationFrame(animFrameId);
+      video.style.display = 'none';
+      document.getElementById('btnStartCamera').style.display = 'block';
+      document.getElementById('rxInfo').innerText = 'Presiona el botón para solicitar el acceso a la cámara.';
+    }
+
+    function scanFrame() {
+      if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        canvasElement.height = video.videoHeight;
+        canvasElement.width = video.videoWidth;
+        canvas.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
+        
+        const imageData = canvas.getImageData(0, 0, canvasElement.width, canvasElement.height);
+        const code = jsQR(imageData.data, imageData.width, imageData.height, {
+          inversionAttempts: "dontInvert",
+        });
+
+        if (code && code.data) {
+          processQrPayload(code.data);
+        }
+      }
+      animFrameId = requestAnimationFrame(scanFrame);
+    }
+
+    function processQrPayload(payload) {
+      const parts = payload.split('|');
+      if (parts.length !== 4) return;
+
+      const [sessionId, indexStr, totalStr, base64Data] = parts;
+      const index = parseInt(indexStr, 10);
+      const total = parseInt(totalStr, 10);
+
+      if (rxSessionId !== sessionId) {
+        rxSessionId = sessionId;
+        rxChunks.clear();
+        rxTotalChunks = total;
+        document.getElementById('resultImg').src = '';
+      }
+
+      if (!rxChunks.has(index)) {
+        rxChunks.set(index, base64Data);
+        
+        const progress = Math.round((rxChunks.size / rxTotalChunks) * 100);
+        document.getElementById('progressFill').style.width = progress + '%';
+        document.getElementById('rxInfo').innerText = 
+          `Recibiendo: ${rxChunks.size} / ${rxTotalChunks} frames (${progress}%)`;
+
+        if (rxChunks.size === rxTotalChunks) {
+          document.getElementById('rxInfo').innerText = '¡Imagen recibida con éxito!';
+          reconstructImage();
+        }
+      }
+    }
+
+    function reconstructImage() {
+      let binaryString = '';
+      for (let i = 0; i < rxTotalChunks; i++) {
+        const base64Chunk = rxChunks.get(i);
+        binaryString += atob(base64Chunk);
+      }
+
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+
+      const blob = new Blob([bytes]);
+      document.getElementById('resultImg').src = URL.createObjectURL(blob);
+    }
+  </script>
+</body>
+</html>
