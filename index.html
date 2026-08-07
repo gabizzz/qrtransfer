@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Transmisión QR Bidireccional</title>
+  <title>Transmisión QR Dinámico</title>
   <style>
     * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
     body { margin: 0; padding: 16px; background: #121212; color: #f0f0f0; text-align: center; }
@@ -16,12 +16,13 @@
     .card.active { display: block; }
     input[type="file"] { margin: 12px 0; color: #ccc; }
     .qr-container { display: flex; justify-content: center; margin-top: 12px; padding: 12px; background: #fff; border-radius: 8px; }
-    video { width: 100%; max-width: 320px; border-radius: 8px; background: #000; display: none; margin: 12px auto; }
-    .progress-bar { width: 100%; background: #333; height: 14px; border-radius: 7px; overflow: hidden; margin: 12px 0; }
+    video { width: 100%; max-width: 360px; border-radius: 8px; background: #000; display: none; margin: 12px auto; }
+    .progress-bar { width: 100%; background: #333; height: 16px; border-radius: 8px; overflow: hidden; margin: 12px 0; }
     .progress-fill { width: 0%; height: 100%; background: #007bff; transition: width 0.15s ease-out; }
     .progress-fill.done { background: #28a745; }
     #resultImg { max-width: 100%; margin-top: 12px; border-radius: 8px; border: 2px solid #333; }
-    .info { font-size: 0.9rem; color: #aaa; margin-top: 8px; }
+    .info { font-size: 0.95rem; color: #aaa; margin-top: 8px; font-weight: 500; }
+    .counter { font-size: 1.1rem; color: #28a745; font-weight: bold; margin-top: 6px; }
   </style>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
@@ -29,7 +30,7 @@
 </head>
 <body>
 
-  <h1>Transmisión QR Bidireccional</h1>
+  <h1>Transmisión QR Dinámico</h1>
 
   <div class="tabs">
     <button id="btnTx" class="active" onclick="switchMode('tx')">Emisor (Enviar)</button>
@@ -40,29 +41,21 @@
   <div id="txCard" class="card active">
     <input type="file" id="fileInput" accept="image/*" />
     <div id="txInfo" class="info">Selecciona una imagen para comenzar</div>
-    
-    <div class="progress-bar">
-      <div id="txProgressFill" class="progress-fill"></div>
-    </div>
-    <div id="txFeedbackInfo" class="info">Estado del Receptor: Sin confirmación</div>
-
     <div id="qrcodeTx" class="qr-container"></div>
-    
-    <button id="btnStartTxCam" class="btn-action" style="margin-top: 16px;" onclick="startTxCamera()">Activar Cámara para Feedback</button>
-    <video id="txVideo" playsinline></video>
   </div>
 
   <!-- RECEPTOR -->
   <div id="rxCard" class="card">
     <button id="btnStartRxCam" class="btn-action" onclick="startRxCamera()">Habilitar Cámara Receptor</button>
     <video id="rxVideo" playsinline></video>
+    
     <div class="progress-bar">
       <div id="rxProgressFill" class="progress-fill"></div>
     </div>
-    <div id="rxInfo" class="info">Presiona el botón para escanear.</div>
     
-    <!-- QR de retorno que muestra el estado en el receptor -->
-    <div id="qrcodeRx" class="qr-container" style="display:none;"></div>
+    <div id="rxCounter" class="counter">Paquetes: 0 / 0</div>
+    <div id="rxInfo" class="info">Presiona el botón para comenzar a escanear.</div>
+    
     <img id="resultImg" alt="" />
   </div>
 
@@ -87,15 +80,14 @@
         activeStream = null;
       }
       if (animFrameId) cancelAnimationFrame(animFrameId);
-      document.getElementById('txVideo').style.display = 'none';
       document.getElementById('rxVideo').style.display = 'none';
+      document.getElementById('btnStartRxCam').style.display = 'block';
     }
 
     // ==========================================
     // LÓGICA EMISOR
     // ==========================================
-    const qrGenTx = new QRCode(document.getElementById('qrcodeTx'), { width: 240, height: 240, correctLevel: QRCode.CorrectLevel.L });
-    let txSessionId = null;
+    const qrGenTx = new QRCode(document.getElementById('qrcodeTx'), { width: 260, height: 260, correctLevel: QRCode.CorrectLevel.L });
 
     document.getElementById('fileInput').addEventListener('change', function(e) {
       const file = e.target.files[0];
@@ -105,12 +97,10 @@
       reader.onload = function(evt) {
         const bytes = new Uint8Array(evt.target.result);
         const totalChunks = Math.ceil(bytes.length / CHUNK_SIZE);
-        txSessionId = Math.floor(Math.random() * 9000 + 1000);
+        const sessionId = Math.floor(Math.random() * 9000 + 1000);
         let currentChunk = 0;
 
         document.getElementById('txInfo').innerText = `Tamaño: ${(bytes.length / 1024).toFixed(1)} KB | Total Paquetes: ${totalChunks}`;
-        document.getElementById('txProgressFill').style.width = '0%';
-        document.getElementById('txFeedbackInfo').innerText = 'Esperando lecturas del Receptor...';
 
         clearInterval(txTimer);
         txTimer = setInterval(() => {
@@ -122,59 +112,16 @@
           for (let i = 0; i < chunkData.length; i++) binary += String.fromCharCode(chunkData[i]);
           const base64Chunk = btoa(binary);
 
-          qrGenTx.makeCode(`${txSessionId}|${currentChunk}|${totalChunks}|${base64Chunk}`);
+          qrGenTx.makeCode(`${sessionId}|${currentChunk}|${totalChunks}|${base64Chunk}`);
           currentChunk = (currentChunk + 1) % totalChunks;
         }, 1000 / FPS);
       };
       reader.readAsArrayBuffer(file);
     });
 
-    async function startTxCamera() {
-      stopCamera();
-      const video = document.getElementById('txVideo');
-      try {
-        activeStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-        video.srcObject = activeStream;
-        video.style.display = 'block';
-        await video.play();
-        scanTxFeedback();
-      } catch (err) {
-        alert('Error al acceder a la cámara: ' + err.message);
-      }
-    }
-
-    function scanTxFeedback() {
-      const video = document.getElementById('txVideo');
-      if (video.readyState === video.HAVE_ENOUGH_DATA) {
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const code = jsQR(imageData.data, imageData.width, imageData.height);
-
-        if (code && code.data && code.data.startsWith('ACK|')) {
-          const [, sessionId, recCount, total] = code.data.split('|');
-          if (sessionId === String(txSessionId)) {
-            const pct = Math.round((parseInt(recCount) / parseInt(total)) * 100);
-            const fill = document.getElementById('txProgressFill');
-            fill.style.width = pct + '%';
-            if (pct >= 100) fill.classList.add('done');
-            document.getElementById('txFeedbackInfo').innerText = `Receptor ha recibido: ${recCount} / ${total} (${pct}%)`;
-          }
-        }
-      }
-      animFrameId = requestAnimationFrame(scanTxFeedback);
-    }
-
     // ==========================================
     // LÓGICA RECEPTOR
     // ==========================================
-    const qrContainerRx = document.getElementById('qrcodeRx');
-    const qrGenRx = new QRCode(qrContainerRx, { width: 160, height: 160, correctLevel: QRCode.CorrectLevel.L });
-    
     let rxSessionId = null;
     let rxChunks = new Map();
     let rxTotalChunks = 0;
@@ -187,6 +134,7 @@
         video.srcObject = activeStream;
         video.style.display = 'block';
         document.getElementById('btnStartRxCam').style.display = 'none';
+        document.getElementById('rxInfo').innerText = 'Apunta la cámara a la pantalla del emisor...';
         await video.play();
         scanRxFrame();
       } catch (err) {
@@ -206,7 +154,7 @@
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const code = jsQR(imageData.data, imageData.width, imageData.height);
 
-        if (code && code.data && !code.data.startsWith('ACK|')) {
+        if (code && code.data) {
           processRxPayload(code.data);
         }
       }
@@ -221,25 +169,29 @@
       const index = parseInt(indexStr, 10);
       const total = parseInt(totalStr, 10);
 
+      // Si detecta una nueva transmisión
       if (rxSessionId !== sessionId) {
         rxSessionId = sessionId;
         rxChunks.clear();
         rxTotalChunks = total;
         document.getElementById('resultImg').src = '';
+        document.getElementById('rxProgressFill').classList.remove('done');
       }
 
+      // Guardar el bloque si es nuevo
       if (!rxChunks.has(index)) {
         rxChunks.set(index, base64Data);
         
         const progress = Math.round((rxChunks.size / rxTotalChunks) * 100);
-        document.getElementById('rxProgressFill').style.width = progress + '%';
-        document.getElementById('rxInfo').innerText = `Recibiendo: ${rxChunks.size} / ${rxTotalChunks} (${progress}%)`;
+        const fill = document.getElementById('rxProgressFill');
+        fill.style.width = progress + '%';
 
-        // Generar/Actualizar QR de confirmación (Feedback para el Emisor)
-        qrContainerRx.style.display = 'flex';
-        qrGenRx.makeCode(`ACK|${rxSessionId}|${rxChunks.size}|${rxTotalChunks}`);
+        // Actualizar indicador de paquetes recibidos
+        document.getElementById('rxCounter').innerText = `Paquetes: ${rxChunks.size} / ${rxTotalChunks}`;
+        document.getElementById('rxInfo').innerText = `Progreso: ${progress}%`;
 
         if (rxChunks.size === rxTotalChunks) {
+          fill.classList.add('done');
           document.getElementById('rxInfo').innerText = '¡Imagen recibida exitosamente!';
           reconstructImage();
         }
