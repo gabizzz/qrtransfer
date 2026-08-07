@@ -129,23 +129,44 @@
     async function startRxCamera() {
       stopCamera();
       const video = document.getElementById('rxVideo');
+      const rxInfo = document.getElementById('rxInfo');
+
+      // Verificación de Origen Seguro (HTTPS / Localhost)
+      if (!window.isSecureContext) {
+        alert("⚠️ Atencion: El acceso a la cámara requiere HTTPS o localhost.\n\nSi estás probando por IP local (http://192.168.x.x), debes habilitar la flag en Chrome:\nchrome://flags/#unsafely-treat-insecure-origin-as-secure");
+        rxInfo.innerText = "Error: Contexto no seguro (requiere HTTPS).";
+        return;
+      }
+
       try {
-        activeStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        activeStream = await navigator.mediaDevices.getUserMedia({ 
+          video: { facingMode: 'environment' } 
+        });
         video.srcObject = activeStream;
         video.style.display = 'block';
         document.getElementById('btnStartRxCam').style.display = 'none';
-        document.getElementById('rxInfo').innerText = 'Apunta la cámara a la pantalla del emisor...';
+        rxInfo.innerText = 'Apunta la cámara a la pantalla del emisor...';
         await video.play();
         scanRxFrame();
       } catch (err) {
-        alert('Error al acceder a la cámara: ' + err.message);
+        console.error("Error de cámara:", err);
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          alert("Permiso denegado. Habilita los permisos de cámara en la configuración del navegador para esta página.");
+          rxInfo.innerText = "Permiso de cámara denegado.";
+        } else if (err.name === 'NotFoundError') {
+          alert("No se detectó ninguna cámara en el dispositivo.");
+          rxInfo.innerText = "Cámara no encontrada.";
+        } else {
+          alert("Error al iniciar cámara: " + err.message);
+          rxInfo.innerText = "Error de cámara: " + err.message;
+        }
       }
     }
 
     function scanRxFrame() {
       const video = document.getElementById('rxVideo');
       
-      // 1. Verificar si la librería jsQR ya está cargada en window
+      // Control defensivo para evitar 'jsQR is not defined' si la CDN tarda en cargar
       if (typeof jsQR === 'undefined') {
         document.getElementById('rxInfo').innerText = 'Cargando motor de lectura QR...';
         animFrameId = requestAnimationFrame(scanRxFrame);
@@ -161,7 +182,6 @@
         
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         
-        // 2. Escaneo seguro
         try {
           const code = jsQR(imageData.data, imageData.width, imageData.height);
           if (code && code.data) {
@@ -182,7 +202,6 @@
       const index = parseInt(indexStr, 10);
       const total = parseInt(totalStr, 10);
 
-      // Si detecta una nueva transmisión
       if (rxSessionId !== sessionId) {
         rxSessionId = sessionId;
         rxChunks.clear();
@@ -191,7 +210,6 @@
         document.getElementById('rxProgressFill').classList.remove('done');
       }
 
-      // Guardar el bloque si es nuevo
       if (!rxChunks.has(index)) {
         rxChunks.set(index, base64Data);
         
@@ -199,7 +217,6 @@
         const fill = document.getElementById('rxProgressFill');
         fill.style.width = progress + '%';
 
-        // Actualizar indicador de paquetes recibidos
         document.getElementById('rxCounter').innerText = `Paquetes: ${rxChunks.size} / ${rxTotalChunks}`;
         document.getElementById('rxInfo').innerText = `Progreso: ${progress}%`;
 
