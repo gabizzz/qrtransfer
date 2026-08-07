@@ -144,6 +144,14 @@
 
     function scanRxFrame() {
       const video = document.getElementById('rxVideo');
+      
+      // 1. Verificar si la librería jsQR ya está cargada en window
+      if (typeof jsQR === 'undefined') {
+        document.getElementById('rxInfo').innerText = 'Cargando motor de lectura QR...';
+        animFrameId = requestAnimationFrame(scanRxFrame);
+        return;
+      }
+
       if (video.readyState === video.HAVE_ENOUGH_DATA) {
         const canvas = document.createElement('canvas');
         canvas.width = video.videoWidth;
@@ -152,10 +160,15 @@
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const code = jsQR(imageData.data, imageData.width, imageData.height);
-
-        if (code && code.data) {
-          processRxPayload(code.data);
+        
+        // 2. Escaneo seguro
+        try {
+          const code = jsQR(imageData.data, imageData.width, imageData.height);
+          if (code && code.data) {
+            processRxPayload(code.data);
+          }
+        } catch (e) {
+          console.error("Error al procesar el frame con jsQR:", e);
         }
       }
       animFrameId = requestAnimationFrame(scanRxFrame);
