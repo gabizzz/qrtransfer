@@ -15,7 +15,16 @@
     .card { background: #1e1e1e; padding: 16px; border-radius: 12px; display: none; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
     .card.active { display: block; }
     input[type="file"] { margin: 12px 0; color: #ccc; }
-    .qr-container { display: flex; justify-content: center; margin-top: 12px; padding: 12px; background: #fff; border-radius: 8px; }
+    
+    /* Layout para QR e Indicador de Frame */
+    .tx-display { display: flex; flex-direction: column; align-items: center; gap: 12px; margin-top: 12px; }
+    @media (min-width: 480px) {
+      .tx-display { flex-direction: row; justify-content: center; }
+    }
+    
+    .qr-container { display: flex; justify-content: center; padding: 12px; background: #fff; border-radius: 8px; }
+    .frame-badge { background: #2a2a2a; border: 2px solid #007bff; padding: 12px 16px; border-radius: 8px; color: #007bff; font-weight: bold; font-size: 1.2rem; min-width: 140px; }
+    
     video { width: 100%; max-width: 360px; border-radius: 8px; background: #000; display: none; margin: 12px auto; }
     .progress-bar { width: 100%; background: #333; height: 16px; border-radius: 8px; overflow: hidden; margin: 12px 0; }
     .progress-fill { width: 0%; height: 100%; background: #007bff; transition: width 0.15s ease-out; }
@@ -38,7 +47,13 @@
   <div id="txCard" class="card active">
     <input type="file" id="fileInput" accept="image/*" />
     <div id="txInfo" class="info">Selecciona una imagen para comenzar</div>
-    <div id="qrcodeTx" class="qr-container"></div>
+    
+    <div class="tx-display">
+      <div id="qrcodeTx" class="qr-container"></div>
+      <div id="txFrameBadge" class="frame-badge" style="display:none;">
+        Frame: <span id="txFrameNum">0</span> / <span id="txFrameTotal">0</span>
+      </div>
+    </div>
   </div>
 
   <!-- RECEPTOR -->
@@ -57,7 +72,6 @@
   </div>
 
   <script>
-    // Carga resiliente de scripts con fallbacks para GitHub Pages
     function loadScript(src) {
       return new Promise((resolve, reject) => {
         const s = document.createElement('script');
@@ -87,7 +101,10 @@
     }
 
     const CHUNK_SIZE = 250;
-    const FPS = 8;
+    
+    // FPS ajustados a 3 cuadros por segundo para facilitar la lectura de la cámara
+    const FPS = 3; 
+    
     let txTimer = null;
     let activeStream = null;
     let animFrameId = null;
@@ -134,6 +151,10 @@
         let currentChunk = 0;
 
         document.getElementById('txInfo').innerText = `Tamaño: ${(bytes.length / 1024).toFixed(1)} KB | Total Paquetes: ${totalChunks}`;
+        
+        // Mostrar badge de frames
+        document.getElementById('txFrameBadge').style.display = 'block';
+        document.getElementById('txFrameTotal').innerText = totalChunks;
 
         clearInterval(txTimer);
         txTimer = setInterval(() => {
@@ -146,6 +167,10 @@
           const base64Chunk = btoa(binary);
 
           qrGenTx.makeCode(`${sessionId}|${currentChunk}|${totalChunks}|${base64Chunk}`);
+          
+          // Actualizar indicador visual del frame
+          document.getElementById('txFrameNum').innerText = currentChunk + 1;
+
           currentChunk = (currentChunk + 1) % totalChunks;
         }, 1000 / FPS);
       };
