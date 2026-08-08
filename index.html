@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Transmisión QR Dinámico</title>
+  <title>Transmisión Universal por QR</title>
   <style>
     * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
     body { margin: 0; padding: 16px; background: #121212; color: #f0f0f0; text-align: center; }
@@ -11,32 +11,30 @@
     .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
     button { flex: 1; padding: 12px; font-weight: bold; border: none; border-radius: 8px; background: #2a2a2a; color: #fff; cursor: pointer; }
     button.active { background: #007bff; }
-    .btn-action { background: #28a745; width: 100%; margin-bottom: 12px; padding: 14px; font-size: 1rem; color: #fff; border: none; border-radius: 8px; cursor: pointer; }
+    .btn-action { background: #28a745; width: 100%; margin-bottom: 8px; padding: 14px; font-size: 1rem; color: #fff; border: none; border-radius: 8px; cursor: pointer; }
+    .btn-secondary { background: #6c757d; width: 100%; margin-bottom: 12px; padding: 10px; font-size: 0.9rem; color: #fff; border: none; border-radius: 8px; cursor: pointer; display: none; }
     .card { background: #1e1e1e; padding: 16px; border-radius: 12px; display: none; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
     .card.active { display: block; }
-    input[type="file"] { margin: 12px 0; color: #ccc; }
+    input[type="file"] { margin: 12px 0; color: #ccc; width: 100%; }
     
-    /* Layout para QR e Indicador de Frame */
     .tx-display { display: flex; flex-direction: column; align-items: center; gap: 12px; margin-top: 12px; }
-    @media (min-width: 480px) {
-      .tx-display { flex-direction: row; justify-content: center; }
-    }
-    
     .qr-container { display: flex; justify-content: center; padding: 12px; background: #fff; border-radius: 8px; }
-    .frame-badge { background: #2a2a2a; border: 2px solid #007bff; padding: 12px 16px; border-radius: 8px; color: #007bff; font-weight: bold; font-size: 1.2rem; min-width: 140px; }
+    .frame-badge { background: #2a2a2a; border: 2px solid #007bff; padding: 12px 16px; border-radius: 8px; color: #007bff; font-weight: bold; font-size: 1.2rem; }
     
     video { width: 100%; max-width: 360px; border-radius: 8px; background: #000; display: none; margin: 12px auto; }
     .progress-bar { width: 100%; background: #333; height: 16px; border-radius: 8px; overflow: hidden; margin: 12px 0; }
     .progress-fill { width: 0%; height: 100%; background: #007bff; transition: width 0.15s ease-out; }
     .progress-fill.done { background: #28a745; }
-    #resultImg { max-width: 100%; margin-top: 12px; border-radius: 8px; border: 2px solid #333; }
+    
+    .download-box { margin-top: 16px; padding: 12px; background: #2a2a2a; border-radius: 8px; display: none; }
+    .download-link { display: inline-block; padding: 12px 20px; background: #28a745; color: #fff; text-decoration: none; font-weight: bold; border-radius: 6px; }
     .info { font-size: 0.95rem; color: #aaa; margin-top: 8px; font-weight: 500; }
     .counter { font-size: 1.1rem; color: #28a745; font-weight: bold; margin-top: 6px; }
   </style>
 </head>
 <body>
 
-  <h1>Transmisión QR Dinámico</h1>
+  <h1>Transmisión Universal por QR</h1>
 
   <div class="tabs">
     <button id="btnTx" class="active" onclick="switchMode('tx')">Emisor (Enviar)</button>
@@ -45,13 +43,14 @@
 
   <!-- EMISOR -->
   <div id="txCard" class="card active">
-    <input type="file" id="fileInput" accept="image/*" />
-    <div id="txInfo" class="info">Selecciona una imagen para comenzar</div>
+    <!-- Acepta cualquier tipo de archivo -->
+    <input type="file" id="fileInput" />
+    <div id="txInfo" class="info">Selecciona cualquier archivo (TXT, PDF, MP3, JPG, etc.)</div>
     
     <div class="tx-display">
       <div id="qrcodeTx" class="qr-container"></div>
       <div id="txFrameBadge" class="frame-badge" style="display:none;">
-        Frame: <span id="txFrameNum">0</span> / <span id="txFrameTotal">0</span>
+        Paquete: <span id="txFrameNum">0</span> / <span id="txFrameTotal">0</span>
       </div>
     </div>
   </div>
@@ -59,6 +58,8 @@
   <!-- RECEPTOR -->
   <div id="rxCard" class="card">
     <button id="btnStartRxCam" class="btn-action" onclick="startRxCamera()">Habilitar Cámara Receptor</button>
+    <button id="btnLockFocus" class="btn-secondary" onclick="toggleAutoFocus()">🔒 Bloquear Enfoque Cámara</button>
+    
     <video id="rxVideo" playsinline></video>
     
     <div class="progress-bar">
@@ -68,7 +69,10 @@
     <div id="rxCounter" class="counter">Paquetes: 0 / 0</div>
     <div id="rxInfo" class="info">Presiona el botón para comenzar a escanear.</div>
     
-    <img id="resultImg" alt="" />
+    <div id="downloadBox" class="download-box">
+      <p id="downloadInfo" style="margin-top:0; color:#fff;"></p>
+      <a id="downloadBtn" class="download-link" href="#" download>Descargar Archivo Recibido</a>
+    </div>
   </div>
 
   <script>
@@ -100,11 +104,10 @@
       }
     }
 
-    const CHUNK_SIZE = 100;
-    
-    // FPS ajustados a 3 cuadros por segundo para facilitar la lectura de la cámara
-    const FPS = 2; 
-    
+    // Tamaño reducido para garantizar alta lecturabilidad en la cámara
+    const CHUNK_SIZE = 120; 
+    const FPS = 3; 
+
     let txTimer = null;
     let activeStream = null;
     let animFrameId = null;
@@ -125,6 +128,7 @@
       if (animFrameId) cancelAnimationFrame(animFrameId);
       document.getElementById('rxVideo').style.display = 'none';
       document.getElementById('btnStartRxCam').style.display = 'block';
+      document.getElementById('btnLockFocus').style.display = 'none';
     }
 
     // ==========================================
@@ -146,32 +150,37 @@
       const reader = new FileReader();
       reader.onload = function(evt) {
         const bytes = new Uint8Array(evt.target.result);
-        const totalChunks = Math.ceil(bytes.length / CHUNK_SIZE);
+        const dataChunks = Math.ceil(bytes.length / CHUNK_SIZE);
+        const totalChunks = dataChunks + 1; // 1 extra para metadatos
         const sessionId = Math.floor(Math.random() * 9000 + 1000);
-        let currentChunk = 0;
+        let currentChunkIndex = 0;
 
-        document.getElementById('txInfo').innerText = `Tamaño: ${(bytes.length / 1024).toFixed(1)} KB | Total Paquetes: ${totalChunks}`;
-        
-        // Mostrar badge de frames
+        document.getElementById('txInfo').innerText = `Archivo: ${file.name} (${(bytes.length / 1024).toFixed(1)} KB)`;
         document.getElementById('txFrameBadge').style.display = 'block';
         document.getElementById('txFrameTotal').innerText = totalChunks;
 
         clearInterval(txTimer);
         txTimer = setInterval(() => {
-          const start = currentChunk * CHUNK_SIZE;
-          const end = Math.min(start + CHUNK_SIZE, bytes.length);
-          const chunkData = bytes.slice(start, end);
+          if (currentChunkIndex === 0) {
+            // Paquete 0: METADATOS (Nombre y Tipo MIME)
+            const metaPayload = `META|${sessionId}|${totalChunks}|${encodeURIComponent(file.name)}|${file.type || 'application/octet-stream'}`;
+            qrGenTx.makeCode(metaPayload);
+          } else {
+            // Paquetes 1 a N: DATOS
+            const dataIndex = currentChunkIndex - 1;
+            const start = dataIndex * CHUNK_SIZE;
+            const end = Math.min(start + CHUNK_SIZE, bytes.length);
+            const chunkData = bytes.slice(start, end);
 
-          let binary = '';
-          for (let i = 0; i < chunkData.length; i++) binary += String.fromCharCode(chunkData[i]);
-          const base64Chunk = btoa(binary);
+            let binary = '';
+            for (let i = 0; i < chunkData.length; i++) binary += String.fromCharCode(chunkData[i]);
+            const base64Chunk = btoa(binary);
 
-          qrGenTx.makeCode(`${sessionId}|${currentChunk}|${totalChunks}|${base64Chunk}`);
-          
-          // Actualizar indicador visual del frame
-          document.getElementById('txFrameNum').innerText = currentChunk + 1;
+            qrGenTx.makeCode(`DATA|${sessionId}|${dataIndex}|${base64Chunk}`);
+          }
 
-          currentChunk = (currentChunk + 1) % totalChunks;
+          document.getElementById('txFrameNum').innerText = currentChunkIndex + 1;
+          currentChunkIndex = (currentChunkIndex + 1) % totalChunks;
         }, 1000 / FPS);
       };
       reader.readAsArrayBuffer(file);
@@ -183,6 +192,8 @@
     let rxSessionId = null;
     let rxChunks = new Map();
     let rxTotalChunks = 0;
+    let rxFileName = "archivo_recibido";
+    let rxFileType = "application/octet-stream";
 
     async function startRxCamera() {
       stopCamera();
@@ -193,8 +204,7 @@
       try {
         await ensureLibrariesLoaded();
       } catch (err) {
-        alert("Error al descargar librerías QR. Verifica tu conexión.");
-        rxInfo.innerText = "Error cargando jsQR.";
+        alert("Error al descargar librerías QR.");
         return;
       }
 
@@ -205,12 +215,32 @@
         video.srcObject = activeStream;
         video.style.display = 'block';
         document.getElementById('btnStartRxCam').style.display = 'none';
+        document.getElementById('btnLockFocus').style.display = 'block';
+        document.getElementById('downloadBox').style.display = 'none';
+        
         rxInfo.innerText = 'Apunta la cámara a la pantalla del emisor...';
         await video.play();
         scanRxFrame();
       } catch (err) {
         console.error("Error de cámara:", err);
         rxInfo.innerText = "Error de cámara: " + err.message;
+      }
+    }
+
+    async function toggleAutoFocus() {
+      if (!activeStream) return;
+      const track = activeStream.getVideoTracks()[0];
+      const capabilities = track.getCapabilities ? track.getCapabilities() : {};
+
+      if (capabilities.focusMode && capabilities.focusMode.includes('fixed')) {
+        try {
+          await track.applyConstraints({ advanced: [{ focusMode: 'fixed' }] });
+          alert("🔒 Enfoque fijado correctamente.");
+        } catch (e) {
+          alert("No se pudo fijar el enfoque en este dispositivo.");
+        }
+      } else {
+        alert("Tu navegador o cámara no permite controlar el enfoque de forma manual.");
       }
     }
 
@@ -242,41 +272,55 @@
 
     function processRxPayload(payload) {
       const parts = payload.split('|');
-      if (parts.length !== 4) return;
+      const type = parts[0];
 
-      const [sessionId, indexStr, totalStr, base64Data] = parts;
-      const index = parseInt(indexStr, 10);
-      const total = parseInt(totalStr, 10);
+      if (type === 'META') {
+        const [, sessionId, total, name, mime] = parts;
+        if (rxSessionId !== sessionId) {
+          resetRxState(sessionId, parseInt(total, 10));
+          rxFileName = decodeURIComponent(name);
+          rxFileType = mime;
+        }
+      } else if (type === 'DATA') {
+        const [, sessionId, indexStr, base64Data] = parts;
+        const index = parseInt(indexStr, 10);
 
-      if (rxSessionId !== sessionId) {
-        rxSessionId = sessionId;
-        rxChunks.clear();
-        rxTotalChunks = total;
-        document.getElementById('resultImg').src = '';
-        document.getElementById('rxProgressFill').classList.remove('done');
-      }
-
-      if (!rxChunks.has(index)) {
-        rxChunks.set(index, base64Data);
-        
-        const progress = Math.round((rxChunks.size / rxTotalChunks) * 100);
-        const fill = document.getElementById('rxProgressFill');
-        fill.style.width = progress + '%';
-
-        document.getElementById('rxCounter').innerText = `Paquetes: ${rxChunks.size} / ${rxTotalChunks}`;
-        document.getElementById('rxInfo').innerText = `Progreso: ${progress}%`;
-
-        if (rxChunks.size === rxTotalChunks) {
-          fill.classList.add('done');
-          document.getElementById('rxInfo').innerText = '¡Imagen recibida exitosamente!';
-          reconstructImage();
+        if (rxSessionId === sessionId && !rxChunks.has(index)) {
+          rxChunks.set(index, base64Data);
+          updateRxProgress();
         }
       }
     }
 
-    function reconstructImage() {
+    function resetRxState(sessionId, total) {
+      rxSessionId = sessionId;
+      rxChunks.clear();
+      rxTotalChunks = total;
+      document.getElementById('downloadBox').style.display = 'none';
+      document.getElementById('rxProgressFill').classList.remove('done');
+    }
+
+    function updateRxProgress() {
+      const totalDataChunks = rxTotalChunks - 1; // descontando el meta
+      const progress = Math.round((rxChunks.size / totalDataChunks) * 100);
+      const fill = document.getElementById('rxProgressFill');
+      fill.style.width = Math.min(progress, 100) + '%';
+
+      document.getElementById('rxCounter').innerText = `Paquetes: ${rxChunks.size} / ${totalDataChunks}`;
+      document.getElementById('rxInfo').innerText = `Recibiendo: ${rxFileName} (${progress}%)`;
+
+      if (rxChunks.size === totalDataChunks) {
+        fill.classList.add('done');
+        document.getElementById('rxInfo').innerText = '¡Archivo recibido exitosamente!';
+        reconstructFile();
+      }
+    }
+
+    function reconstructFile() {
+      const totalDataChunks = rxTotalChunks - 1;
       let binaryString = '';
-      for (let i = 0; i < rxTotalChunks; i++) {
+
+      for (let i = 0; i < totalDataChunks; i++) {
         binaryString += atob(rxChunks.get(i));
       }
 
@@ -285,8 +329,15 @@
         bytes[i] = binaryString.charCodeAt(i);
       }
 
-      const blob = new Blob([bytes]);
-      document.getElementById('resultImg').src = URL.createObjectURL(blob);
+      const blob = new Blob([bytes], { type: rxFileType });
+      const downloadUrl = URL.createObjectURL(blob);
+      
+      const downloadBtn = document.getElementById('downloadBtn');
+      downloadBtn.href = downloadUrl;
+      downloadBtn.download = rxFileName;
+
+      document.getElementById('downloadInfo').innerText = `Archivo listo: ${rxFileName} (${(bytes.length / 1024).toFixed(1)} KB)`;
+      document.getElementById('downloadBox').style.display = 'block';
     }
   </script>
 </body>
