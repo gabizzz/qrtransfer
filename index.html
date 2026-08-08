@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Transmisión QR con Retransmisión de Metadatos</title>
+  <title>Transmisión QR con Recuperación XOR</title>
   <style>
     * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
     body { margin: 0; padding: 16px; background: #121212; color: #f0f0f0; text-align: center; }
@@ -18,7 +18,7 @@
     input[type="file"] { margin: 12px 0; color: #ccc; width: 100%; }
     .tx-display { display: flex; flex-direction: column; align-items: center; gap: 12px; margin-top: 12px; }
     .qr-container { display: flex; justify-content: center; padding: 12px; background: #fff; border-radius: 8px; }
-    .frame-badge { background: #2a2a2a; border: 2px solid #007bff; padding: 12px 16px; border-radius: 8px; color: #007bff; font-weight: bold; font-size: 1.2rem; }
+    .frame-badge { background: #2a2a2a; border: 2px solid #007bff; padding: 12px 16px; border-radius: 8px; color: #007bff; font-weight: bold; font-size: 1rem; }
     video { width: 100%; max-width: 360px; border-radius: 8px; background: #000; display: none; margin: 12px auto; }
     .progress-bar { width: 100%; background: #333; height: 16px; border-radius: 8px; overflow: hidden; margin: 12px 0; }
     .progress-fill { width: 0%; height: 100%; background: #007bff; transition: width 0.15s ease-out; }
@@ -31,7 +31,7 @@
 </head>
 <body>
 
-  <h1>Transmisión Universal por QR</h1>
+  <h1>Transmisión QR con Recuperación XOR</h1>
 
   <div class="tabs">
     <button id="btnTx" class="active" onclick="switchMode('tx')">Emisor (Enviar)</button>
@@ -46,7 +46,7 @@
     <div class="tx-display">
       <div id="qrcodeTx" class="qr-container"></div>
       <div id="txFrameBadge" class="frame-badge" style="display:none;">
-        Estado: <span id="txStatus">META</span> | Paquete: <span id="txFrameNum">0</span> / <span id="txFrameTotal">0</span>
+        Modo: <span id="txMode" style="color:#28a745">RAW</span> | Frame: <span id="txFrameNum">0</span> / <span id="txFrameTotal">0</span>
       </div>
     </div>
   </div>
@@ -100,9 +100,8 @@
       }
     }
 
-    const CHUNK_SIZE = 150; 
-    const FPS = 3; 
-    const META_INTERVAL = 10; // Retransmitir META cada 10 paquetes de datos
+    const CHUNK_SIZE = 140; 
+    const FPS = 8; 
 
     let txTimer = null;
     let activeStream = null;
@@ -127,8 +126,31 @@
       document.getElementById('btnLockFocus').style.display = 'none';
     }
 
+    // Auxiliares para binario Base64 y XOR
+    function bytesToBase64(bytes) {
+      let bin = '';
+      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      return btoa(bin);
+    }
+
+    function base64ToBytes(b64) {
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return bytes;
+    }
+
+    function xorBytes(arr1, arr2) {
+      const len = Math.max(arr1.length, arr2.length);
+      const res = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        res[i] = (arr1[i] || 0) ^ (arr2[i] || 0);
+      }
+      return res;
+    }
+
     // ==========================================
-    // LÓGICA EMISOR CON RETRANSMISIÓN DE METADATOS
+    // EMISOR CON GENERACIÓN DE PACKS XOR
     // ==========================================
     let qrGenTx = null;
 
@@ -145,53 +167,63 @@
 
       const reader = new FileReader();
       reader.onload = function(evt) {
-        const bytes = new Uint8Array(evt.target.result);
-        const totalDataChunks = Math.ceil(bytes.length / CHUNK_SIZE);
+        const fileBytes = new Uint8Array(evt.target.result);
+        const totalChunks = Math.ceil(fileBytes.length / CHUNK_SIZE);
         const sessionId = Math.floor(Math.random() * 9000 + 1000);
-        
-        let currentChunkIndex = 0;
-        let dataStepCounter = 0;
 
-        document.getElementById('txInfo').innerText = `Archivo: ${file.name} (${(bytes.length / 1024).toFixed(1)} KB)`;
+        // Pre-generar bloques de datos
+        const chunks = [];
+        for (let i = 0; i < totalChunks; i++) {
+          const start = i * CHUNK_SIZE;
+          const end = Math.min(start + CHUNK_SIZE, fileBytes.length);
+          chunks.push(fileBytes.slice(start, end));
+        }
+
+        document.getElementById('txInfo').innerText = `Archivo: ${file.name} (${(fileBytes.length / 1024).toFixed(1)} KB)`;
         document.getElementById('txFrameBadge').style.display = 'block';
-        document.getElementById('txFrameTotal').innerText = totalDataChunks;
+        document.getElementById('txFrameTotal').innerText = totalChunks;
+
+        let step = 0;
+        let chunkIndex = 0;
 
         clearInterval(txTimer);
         txTimer = setInterval(() => {
-          // Si toca retransmitir META o es el inicio
-          if (dataStepCounter % META_INTERVAL === 0) {
-            const metaPayload = `META|${sessionId}|${totalDataChunks}|${encodeURIComponent(file.name)}|${file.type || 'application/octet-stream'}`;
+          // Cada 8 frames emite el paquete de Metadatos META
+          if (step % 8 === 0) {
+            const metaPayload = `META|${sessionId}|${totalChunks}|${encodeURIComponent(file.name)}|${file.type || 'application/octet-stream'}`;
             qrGenTx.makeCode(metaPayload);
-            document.getElementById('txStatus').innerText = "META";
+            document.getElementById('txMode').innerText = "META";
             document.getElementById('txFrameNum').innerText = "-";
-          } else {
-            // Transmitir fragmento de DATOS
-            const start = currentChunkIndex * CHUNK_SIZE;
-            const end = Math.min(start + CHUNK_SIZE, bytes.length);
-            const chunkData = bytes.slice(start, end);
-
-            let binary = '';
-            for (let i = 0; i < chunkData.length; i++) binary += String.fromCharCode(chunkData[i]);
-            const base64Chunk = btoa(binary);
-
-            qrGenTx.makeCode(`DATA|${sessionId}|${currentChunkIndex}|${base64Chunk}`);
+          } 
+          // Intercala un paquete combinado XOR para recuperar perdidos
+          else if (step % 3 === 0 && totalChunks > 1) {
+            const idxA = chunkIndex;
+            const idxB = (chunkIndex + 1) % totalChunks;
+            const xored = xorBytes(chunks[idxA], chunks[idxB]);
             
-            document.getElementById('txStatus').innerText = "DATA";
-            document.getElementById('txFrameNum').innerText = currentChunkIndex + 1;
-
-            currentChunkIndex = (currentChunkIndex + 1) % totalDataChunks;
+            qrGenTx.makeCode(`XOR|${sessionId}|${idxA}|${idxB}|${bytesToBase64(xored)}`);
+            document.getElementById('txMode').innerText = `XOR(${idxA+1}+${idxB+1})`;
+            document.getElementById('txFrameNum').innerText = `${idxA+1}`;
+          } 
+          // Transmisión RAW estándar
+          else {
+            qrGenTx.makeCode(`RAW|${sessionId}|${chunkIndex}|${bytesToBase64(chunks[chunkIndex])}`);
+            document.getElementById('txMode').innerText = "RAW";
+            document.getElementById('txFrameNum').innerText = chunkIndex + 1;
+            chunkIndex = (chunkIndex + 1) % totalChunks;
           }
-          dataStepCounter++;
+          step++;
         }, 1000 / FPS);
       };
       reader.readAsArrayBuffer(file);
     });
 
     // ==========================================
-    // LÓGICA RECEPTOR
+    // RECEPTOR CON RESOLUCIÓN XOR DUAL
     // ==========================================
     let rxSessionId = null;
     let rxChunks = new Map();
+    let rxXorPending = [];
     let rxTotalChunks = 0;
     let rxFileName = "archivo_recibido";
     let rxFileType = "application/octet-stream";
@@ -241,7 +273,7 @@
           alert("No se pudo fijar el enfoque.");
         }
       } else {
-        alert("Control de enfoque no soportado en este navegador.");
+        alert("Control de enfoque no soportado en este dispositivo.");
       }
     }
 
@@ -282,26 +314,67 @@
           rxFileName = decodeURIComponent(name);
           rxFileType = mime;
         }
-      } else if (type === 'DATA') {
+      } else if (type === 'RAW') {
         const [, sessionId, indexStr, base64Data] = parts;
         const index = parseInt(indexStr, 10);
 
         if (rxSessionId === sessionId && !rxChunks.has(index)) {
-          rxChunks.set(index, base64Data);
+          rxChunks.set(index, base64ToBytes(base64Data));
+          resolveXorBuffer();
+          updateRxProgress();
+        }
+      } else if (type === 'XOR') {
+        const [, sessionId, idxAStr, idxBStr, base64Data] = parts;
+        const idxA = parseInt(idxAStr, 10);
+        const idxB = parseInt(idxBStr, 10);
+
+        if (rxSessionId === sessionId) {
+          rxXorPending.push({ idxA, idxB, data: base64ToBytes(base64Data) });
+          resolveXorBuffer();
           updateRxProgress();
         }
       }
     }
 
+    // Resuelve paquetes faltantes a partir de combinaciones XOR guardadas
+    function resolveXorBuffer() {
+      let resolvedAny = false;
+      for (let i = rxXorPending.length - 1; i >= 0; i--) {
+        const { idxA, idxB, data } = rxXorPending[i];
+
+        // Caso 1: Tenemos A pero nos falta B -> B = XOR(Data, A)
+        if (rxChunks.has(idxA) && !rxChunks.has(idxB)) {
+          const recoveredB = xorBytes(data, rxChunks.get(idxA));
+          rxChunks.set(idxB, recoveredB);
+          rxXorPending.splice(i, 1);
+          resolvedAny = true;
+        }
+        // Caso 2: Tenemos B pero nos falta A -> A = XOR(Data, B)
+        else if (rxChunks.has(idxB) && !rxChunks.has(idxA)) {
+          const recoveredA = xorBytes(data, rxChunks.get(idxB));
+          rxChunks.set(idxA, recoveredA);
+          rxXorPending.splice(i, 1);
+          resolvedAny = true;
+        }
+        // Caso 3: Ya tenemos ambos, descartar combinador
+        else if (rxChunks.has(idxA) && rxChunks.has(idxB)) {
+          rxXorPending.splice(i, 1);
+        }
+      }
+      if (resolvedAny) resolveXorBuffer(); // Recurrencia si un paquete desbloquea otros
+    }
+
     function resetRxState(sessionId, total) {
       rxSessionId = sessionId;
       rxChunks.clear();
+      rxXorPending = [];
       rxTotalChunks = total;
       document.getElementById('downloadBox').style.display = 'none';
       document.getElementById('rxProgressFill').classList.remove('done');
     }
 
     function updateRxProgress() {
+      if (rxTotalChunks === 0) return;
       const progress = Math.round((rxChunks.size / rxTotalChunks) * 100);
       const fill = document.getElementById('rxProgressFill');
       fill.style.width = Math.min(progress, 100) + '%';
@@ -311,31 +384,33 @@
 
       if (rxChunks.size === rxTotalChunks) {
         fill.classList.add('done');
-        document.getElementById('rxInfo').innerText = '¡Archivo recibido exitosamente!';
+        document.getElementById('rxInfo').innerText = '¡Archivo recuperado exitosamente!';
         reconstructFile();
       }
     }
 
     function reconstructFile() {
-      let binaryString = '';
-
+      let totalLength = 0;
       for (let i = 0; i < rxTotalChunks; i++) {
-        binaryString += atob(rxChunks.get(i));
+        totalLength += rxChunks.get(i).length;
       }
 
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
+      const fullBytes = new Uint8Array(totalLength);
+      let offset = 0;
+      for (let i = 0; i < rxTotalChunks; i++) {
+        const chunk = rxChunks.get(i);
+        fullBytes.set(chunk, offset);
+        offset += chunk.length;
       }
 
-      const blob = new Blob([bytes], { type: rxFileType });
+      const blob = new Blob([fullBytes], { type: rxFileType });
       const downloadUrl = URL.createObjectURL(blob);
       
       const downloadBtn = document.getElementById('downloadBtn');
       downloadBtn.href = downloadUrl;
       downloadBtn.download = rxFileName;
 
-      document.getElementById('downloadInfo').innerText = `Archivo listo: ${rxFileName} (${(bytes.length / 1024).toFixed(1)} KB)`;
+      document.getElementById('downloadInfo').innerText = `Archivo completo: ${rxFileName} (${(fullBytes.length / 1024).toFixed(1)} KB)`;
       document.getElementById('downloadBox').style.display = 'block';
     }
   </script>
