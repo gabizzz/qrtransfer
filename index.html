@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Transmisión Universal por QR</title>
+  <title>Transmisión QR con Retransmisión de Metadatos</title>
   <style>
     * { box-sizing: border-box; font-family: system-ui, -apple-system, sans-serif; }
     body { margin: 0; padding: 16px; background: #121212; color: #f0f0f0; text-align: center; }
@@ -16,16 +16,13 @@
     .card { background: #1e1e1e; padding: 16px; border-radius: 12px; display: none; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
     .card.active { display: block; }
     input[type="file"] { margin: 12px 0; color: #ccc; width: 100%; }
-    
     .tx-display { display: flex; flex-direction: column; align-items: center; gap: 12px; margin-top: 12px; }
     .qr-container { display: flex; justify-content: center; padding: 12px; background: #fff; border-radius: 8px; }
     .frame-badge { background: #2a2a2a; border: 2px solid #007bff; padding: 12px 16px; border-radius: 8px; color: #007bff; font-weight: bold; font-size: 1.2rem; }
-    
     video { width: 100%; max-width: 360px; border-radius: 8px; background: #000; display: none; margin: 12px auto; }
     .progress-bar { width: 100%; background: #333; height: 16px; border-radius: 8px; overflow: hidden; margin: 12px 0; }
     .progress-fill { width: 0%; height: 100%; background: #007bff; transition: width 0.15s ease-out; }
     .progress-fill.done { background: #28a745; }
-    
     .download-box { margin-top: 16px; padding: 12px; background: #2a2a2a; border-radius: 8px; display: none; }
     .download-link { display: inline-block; padding: 12px 20px; background: #28a745; color: #fff; text-decoration: none; font-weight: bold; border-radius: 6px; }
     .info { font-size: 0.95rem; color: #aaa; margin-top: 8px; font-weight: 500; }
@@ -43,14 +40,13 @@
 
   <!-- EMISOR -->
   <div id="txCard" class="card active">
-    <!-- Acepta cualquier tipo de archivo -->
     <input type="file" id="fileInput" />
-    <div id="txInfo" class="info">Selecciona cualquier archivo (TXT, PDF, MP3, JPG, etc.)</div>
+    <div id="txInfo" class="info">Selecciona cualquier archivo</div>
     
     <div class="tx-display">
       <div id="qrcodeTx" class="qr-container"></div>
       <div id="txFrameBadge" class="frame-badge" style="display:none;">
-        Paquete: <span id="txFrameNum">0</span> / <span id="txFrameTotal">0</span>
+        Estado: <span id="txStatus">META</span> | Paquete: <span id="txFrameNum">0</span> / <span id="txFrameTotal">0</span>
       </div>
     </div>
   </div>
@@ -104,9 +100,9 @@
       }
     }
 
-    // Tamaño reducido para garantizar alta lecturabilidad en la cámara
-    const CHUNK_SIZE = 300; 
-    const FPS = 8; 
+    const CHUNK_SIZE = 150; 
+    const FPS = 3; 
+    const META_INTERVAL = 10; // Retransmitir META cada 10 paquetes de datos
 
     let txTimer = null;
     let activeStream = null;
@@ -132,7 +128,7 @@
     }
 
     // ==========================================
-    // LÓGICA EMISOR
+    // LÓGICA EMISOR CON RETRANSMISIÓN DE METADATOS
     // ==========================================
     let qrGenTx = null;
 
@@ -150,25 +146,27 @@
       const reader = new FileReader();
       reader.onload = function(evt) {
         const bytes = new Uint8Array(evt.target.result);
-        const dataChunks = Math.ceil(bytes.length / CHUNK_SIZE);
-        const totalChunks = dataChunks + 1; // 1 extra para metadatos
+        const totalDataChunks = Math.ceil(bytes.length / CHUNK_SIZE);
         const sessionId = Math.floor(Math.random() * 9000 + 1000);
+        
         let currentChunkIndex = 0;
+        let dataStepCounter = 0;
 
         document.getElementById('txInfo').innerText = `Archivo: ${file.name} (${(bytes.length / 1024).toFixed(1)} KB)`;
         document.getElementById('txFrameBadge').style.display = 'block';
-        document.getElementById('txFrameTotal').innerText = totalChunks;
+        document.getElementById('txFrameTotal').innerText = totalDataChunks;
 
         clearInterval(txTimer);
         txTimer = setInterval(() => {
-          if (currentChunkIndex === 0) {
-            // Paquete 0: METADATOS (Nombre y Tipo MIME)
-            const metaPayload = `META|${sessionId}|${totalChunks}|${encodeURIComponent(file.name)}|${file.type || 'application/octet-stream'}`;
+          // Si toca retransmitir META o es el inicio
+          if (dataStepCounter % META_INTERVAL === 0) {
+            const metaPayload = `META|${sessionId}|${totalDataChunks}|${encodeURIComponent(file.name)}|${file.type || 'application/octet-stream'}`;
             qrGenTx.makeCode(metaPayload);
+            document.getElementById('txStatus').innerText = "META";
+            document.getElementById('txFrameNum').innerText = "-";
           } else {
-            // Paquetes 1 a N: DATOS
-            const dataIndex = currentChunkIndex - 1;
-            const start = dataIndex * CHUNK_SIZE;
+            // Transmitir fragmento de DATOS
+            const start = currentChunkIndex * CHUNK_SIZE;
             const end = Math.min(start + CHUNK_SIZE, bytes.length);
             const chunkData = bytes.slice(start, end);
 
@@ -176,11 +174,14 @@
             for (let i = 0; i < chunkData.length; i++) binary += String.fromCharCode(chunkData[i]);
             const base64Chunk = btoa(binary);
 
-            qrGenTx.makeCode(`DATA|${sessionId}|${dataIndex}|${base64Chunk}`);
-          }
+            qrGenTx.makeCode(`DATA|${sessionId}|${currentChunkIndex}|${base64Chunk}`);
+            
+            document.getElementById('txStatus').innerText = "DATA";
+            document.getElementById('txFrameNum').innerText = currentChunkIndex + 1;
 
-          document.getElementById('txFrameNum').innerText = currentChunkIndex + 1;
-          currentChunkIndex = (currentChunkIndex + 1) % totalChunks;
+            currentChunkIndex = (currentChunkIndex + 1) % totalDataChunks;
+          }
+          dataStepCounter++;
         }, 1000 / FPS);
       };
       reader.readAsArrayBuffer(file);
@@ -235,12 +236,12 @@
       if (capabilities.focusMode && capabilities.focusMode.includes('fixed')) {
         try {
           await track.applyConstraints({ advanced: [{ focusMode: 'fixed' }] });
-          alert("🔒 Enfoque fijado correctamente.");
+          alert("🔒 Enfoque fijado.");
         } catch (e) {
-          alert("No se pudo fijar el enfoque en este dispositivo.");
+          alert("No se pudo fijar el enfoque.");
         }
       } else {
-        alert("Tu navegador o cámara no permite controlar el enfoque de forma manual.");
+        alert("Control de enfoque no soportado en este navegador.");
       }
     }
 
@@ -301,15 +302,14 @@
     }
 
     function updateRxProgress() {
-      const totalDataChunks = rxTotalChunks - 1; // descontando el meta
-      const progress = Math.round((rxChunks.size / totalDataChunks) * 100);
+      const progress = Math.round((rxChunks.size / rxTotalChunks) * 100);
       const fill = document.getElementById('rxProgressFill');
       fill.style.width = Math.min(progress, 100) + '%';
 
-      document.getElementById('rxCounter').innerText = `Paquetes: ${rxChunks.size} / ${totalDataChunks}`;
+      document.getElementById('rxCounter').innerText = `Paquetes: ${rxChunks.size} / ${rxTotalChunks}`;
       document.getElementById('rxInfo').innerText = `Recibiendo: ${rxFileName} (${progress}%)`;
 
-      if (rxChunks.size === totalDataChunks) {
+      if (rxChunks.size === rxTotalChunks) {
         fill.classList.add('done');
         document.getElementById('rxInfo').innerText = '¡Archivo recibido exitosamente!';
         reconstructFile();
@@ -317,10 +317,9 @@
     }
 
     function reconstructFile() {
-      const totalDataChunks = rxTotalChunks - 1;
       let binaryString = '';
 
-      for (let i = 0; i < totalDataChunks; i++) {
+      for (let i = 0; i < rxTotalChunks; i++) {
         binaryString += atob(rxChunks.get(i));
       }
 
